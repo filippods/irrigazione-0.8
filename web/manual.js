@@ -203,6 +203,9 @@ function fetchZonesStatus() {
 
 // In manual.js, sostituire la funzione updateZonesUI:
 
+// Nel file web/manual.js
+// Modifica alla funzione updateZonesUI - sezione che gestisce la barra di progresso
+
 function updateZonesUI(zonesStatus) {
     if (!Array.isArray(zonesStatus)) return;
     

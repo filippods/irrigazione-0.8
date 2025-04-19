@@ -441,44 +441,44 @@ function updateProgramsUI(state) {
             }
         }
         
-		// Aggiorna pulsanti
-		const startBtn = card.querySelector('.btn-start');
-		const stopBtn = card.querySelector('.btn-stop');
+        // Aggiorna pulsanti
+        const startBtn = card.querySelector('.btn-start');
+        const stopBtn = card.querySelector('.btn-stop');
 
-		if (startBtn && stopBtn) {
-			if (isActive) {
-				// Questo programma è attivo
-				startBtn.classList.add('disabled');
-				startBtn.disabled = true;
-				
-				stopBtn.classList.remove('disabled');
-				stopBtn.disabled = false;
-				stopBtn.style.pointerEvents = 'auto';
-				
-				// Assicurati che l'onClick sia impostato correttamente
-				if (stopBtn.getAttribute('onclick') !== "stopProgram()") {
-					stopBtn.setAttribute('onclick', "stopProgram()");
-				}
-			} else if (programRunning) {
-				// Un altro programma è attivo
-				startBtn.classList.add('disabled');
-				startBtn.disabled = true;
-				
-				stopBtn.classList.add('disabled');
-				stopBtn.disabled = true;
-				stopBtn.style.pointerEvents = 'none';
-				stopBtn.removeAttribute('onclick');
-			} else {
-				// Nessun programma è attivo
-				startBtn.classList.remove('disabled');
-				startBtn.disabled = false;
-				
-				stopBtn.classList.add('disabled');
-				stopBtn.disabled = true;
-				stopBtn.style.pointerEvents = 'none';
-				stopBtn.removeAttribute('onclick');
-			}
-		}
+        if (startBtn && stopBtn) {
+            if (isActive) {
+                // Questo programma è attivo
+                startBtn.classList.add('disabled');
+                startBtn.disabled = true;
+                
+                stopBtn.classList.remove('disabled');
+                stopBtn.disabled = false;
+                stopBtn.style.pointerEvents = 'auto';
+                
+                // Assicurati che l'onClick sia impostato correttamente
+                if (stopBtn.getAttribute('onclick') !== "stopProgram()") {
+                    stopBtn.setAttribute('onclick', "stopProgram()");
+                }
+            } else if (programRunning) {
+                // Un altro programma è attivo
+                startBtn.classList.add('disabled');
+                startBtn.disabled = true;
+                
+                stopBtn.classList.add('disabled');
+                stopBtn.disabled = true;
+                stopBtn.style.pointerEvents = 'none';
+                stopBtn.removeAttribute('onclick');
+            } else {
+                // Nessun programma è attivo
+                startBtn.classList.remove('disabled');
+                startBtn.disabled = false;
+                
+                stopBtn.classList.add('disabled');
+                stopBtn.disabled = true;
+                stopBtn.style.pointerEvents = 'none';
+                stopBtn.removeAttribute('onclick');
+            }
+        }
     });
 }
 

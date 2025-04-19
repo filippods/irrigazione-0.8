@@ -550,7 +550,6 @@ async def execute_program(program, manual=False):
                 
             log_event(f"Zona {zone_id} completata", "INFO")
 
-            # Modifica in program_manager.py - rimuovere la conversione da minuti a secondi
             # In program_manager.py, the execute_program function, find this section and update it:
             # MODIFIED CODE - CORRECT HANDLING OF ACTIVATION DELAY
             # Gestione del ritardo tra zone
