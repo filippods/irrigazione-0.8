@@ -6,12 +6,28 @@ let userData = {};
 let connectionStatusInterval = null;
 let currentPage = null;
 
+// In scripts.js, sostituire il polyfill esistente (circa linea 11-17):
+
 // Polyfill for crypto.randomUUID for older browsers
 if (!crypto.randomUUID) {
     crypto.randomUUID = function() {
-        return ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, c =>
-            (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)
-        );
+        // Verifica che la funzione getRandomValues sia disponibile
+        if (crypto.getRandomValues) {
+            return '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, function(c) {
+                return (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16);
+            });
+        } else {
+            // Fallback con timestamp + numeri random per browser molto vecchi
+            let d = new Date().getTime();
+            if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+                d += performance.now(); // use high-precision timer if available
+            }
+            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                let r = (d + Math.random() * 16) % 16 | 0;
+                d = Math.floor(d / 16);
+                return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+            });
+        }
     };
 }
 

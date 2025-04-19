@@ -15,10 +15,10 @@ if (typeof window.programsData === 'undefined') {
 }
 
 // Usa direttamente window.programsData in tutto il file
-let zoneNameMap = {};                  // Mappatura ID zona -> nome zona
-let lastKnownState = null;             // Ultimo stato conosciuto (per confronti)
-let pollingAccelerated = false;        // Flag per indicare se il polling è accelerato
-let retryInProgress = false;           // Flag per evitare richieste multiple contemporanee
+window.zoneNameMap = {};                // Mappatura ID zona -> nome zona
+window.lastKnownState = null;           // Ultimo stato conosciuto (per confronti)
+window.pollingAccelerated = false;      // Flag per indicare se il polling è accelerato
+window.retryInProgress = false;         // Flag per evitare richieste multiple contemporanee
 
 // Costanti di configurazione
 const NORMAL_POLLING_INTERVAL = 5000;  // 5 secondi per il polling normale
@@ -232,7 +232,6 @@ function loadUserSettingsAndPrograms() {
         // Salva i programmi per riferimento futuro
 // Salva i programmi per riferimento futuro
 			Object.assign(window.programsData, programs || {});
-			window.programsData = programsData;
         
         // Ora che abbiamo tutti i dati necessari, possiamo renderizzare i programmi
         renderProgramCards(programsData, state);
@@ -306,22 +305,22 @@ function renderProgramCards(programs, state) {
         // Get the automatic status (default to true for backward compatibility)
         const isAutomatic = program.automatic_enabled !== false;
         
-        // Prepara i pulsanti con stati corretti
-        const startButtonHtml = isActive 
-            ? `<button class="btn btn-start disabled" onclick="startProgram('${programId}')" disabled>
-                <span class="btn-icon">▶</span> ON
-               </button>`
-            : `<button class="btn btn-start" onclick="startProgram('${programId}')">
-                <span class="btn-icon">▶</span> ON
-               </button>`;
-               
-        const stopButtonHtml = isActive 
-            ? `<button class="btn btn-stop" onclick="stopProgram()">
-                <span class="btn-icon">■</span> OFF
-               </button>`
-            : `<button class="btn btn-stop disabled" onclick="stopProgram()" disabled>
-                <span class="btn-icon">■</span> OFF
-               </button>`;
+		// Prepara i pulsanti con stati corretti
+		const startButtonHtml = isActive 
+			? `<button class="btn btn-start disabled" onclick="startProgram('${programId}')" disabled>
+				<span class="btn-icon">▶</span> ON
+			   </button>`
+			: `<button class="btn btn-start" onclick="startProgram('${programId}')">
+				<span class="btn-icon">▶</span> ON
+			   </button>`;
+			   
+		const stopButtonHtml = isActive 
+			? `<button class="btn btn-stop" onclick="stopProgram()" style="pointer-events: auto;">
+				<span class="btn-icon">■</span> OFF
+			   </button>`
+			: `<button class="btn btn-stop disabled" disabled>
+				<span class="btn-icon">■</span> OFF
+			   </button>`;
         
         // Card del programma
         const programCard = document.createElement('div');
@@ -440,37 +439,44 @@ function updateProgramsUI(state) {
             }
         }
         
-        // Aggiorna pulsanti
-        const startBtn = card.querySelector('.btn-start');
-        const stopBtn = card.querySelector('.btn-stop');
-        
-        if (startBtn && stopBtn) {
-            if (isActive) {
-                // Questo programma è attivo
-                startBtn.classList.add('disabled');
-                startBtn.disabled = true;
-                stopBtn.classList.remove('disabled');
-                stopBtn.disabled = false;
-                
-                // Assicurati che il pulsante stop sia realmente cliccabile
-                stopBtn.style.pointerEvents = 'auto';
-                stopBtn.setAttribute('onclick', "stopProgram()");
-            } else if (programRunning) {
-                // Un altro programma è attivo
-                startBtn.classList.add('disabled');
-                startBtn.disabled = true;
-                stopBtn.classList.add('disabled');
-                stopBtn.disabled = true;
-                stopBtn.style.pointerEvents = 'none';
-            } else {
-                // Nessun programma è attivo
-                startBtn.classList.remove('disabled');
-                startBtn.disabled = false;
-                stopBtn.classList.add('disabled');
-                stopBtn.disabled = true;
-                stopBtn.style.pointerEvents = 'none';
-            }
-        }
+		// Aggiorna pulsanti
+		const startBtn = card.querySelector('.btn-start');
+		const stopBtn = card.querySelector('.btn-stop');
+
+		if (startBtn && stopBtn) {
+			if (isActive) {
+				// Questo programma è attivo
+				startBtn.classList.add('disabled');
+				startBtn.disabled = true;
+				
+				stopBtn.classList.remove('disabled');
+				stopBtn.disabled = false;
+				stopBtn.style.pointerEvents = 'auto';
+				
+				// Assicurati che l'onClick sia impostato correttamente
+				if (stopBtn.getAttribute('onclick') !== "stopProgram()") {
+					stopBtn.setAttribute('onclick', "stopProgram()");
+				}
+			} else if (programRunning) {
+				// Un altro programma è attivo
+				startBtn.classList.add('disabled');
+				startBtn.disabled = true;
+				
+				stopBtn.classList.add('disabled');
+				stopBtn.disabled = true;
+				stopBtn.style.pointerEvents = 'none';
+				stopBtn.removeAttribute('onclick');
+			} else {
+				// Nessun programma è attivo
+				startBtn.classList.remove('disabled');
+				startBtn.disabled = false;
+				
+				stopBtn.classList.add('disabled');
+				stopBtn.disabled = true;
+				stopBtn.style.pointerEvents = 'none';
+				stopBtn.removeAttribute('onclick');
+			}
+		}
     });
 }
 
@@ -727,11 +733,12 @@ function stopProgram() {
     if (retryInProgress) return;
     retryInProgress = true;
     
-    const stopBtns = document.querySelectorAll('.btn-stop');
-    stopBtns.forEach(btn => {
-        btn.classList.add('disabled');
-        btn.disabled = true;
-    });
+	// Disabilita solo i pulsanti stop dei programmi NON attivi
+	const stopBtns = document.querySelectorAll('.btn-stop:not(.disabled)');
+	stopBtns.forEach(btn => {
+		btn.classList.add('disabled');
+		btn.disabled = true;
+	});
     
     // Tenta più volte la richiesta in caso di errore di rete
     let retryCount = 0;

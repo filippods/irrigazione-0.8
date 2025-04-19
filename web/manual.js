@@ -7,6 +7,7 @@ var progressIntervals = {};
 // Variabili globali aggiuntive
 window.programsData = {}; // Cache dei dati programmi
 window.lastKnownState = null; // Ultimo stato conosciuto
+window.zoneTimers = {}; // Per memorizzare i timer originali delle zone attive
 
 // Modifica alla funzione initializeManualPage
 function initializeManualPage(userData) {
@@ -200,6 +201,8 @@ function fetchZonesStatus() {
 // Nel file web/manual.js
 // Modifica alla funzione updateZonesUI - sezione che gestisce la barra di progresso
 
+// In manual.js, sostituire la funzione updateZonesUI:
+
 function updateZonesUI(zonesStatus) {
     if (!Array.isArray(zonesStatus)) return;
     
@@ -242,54 +245,68 @@ function updateZonesUI(zonesStatus) {
             if (progressBar && timerDisplay) {
                 // Se non c'è già un intervallo in corso per questa zona, creane uno
                 if (!progressIntervals[zone.id]) {
-                    // CORREZIONE: Usa sempre il tempo rimanente dal server per calcolare la durata totale
-                    // anziché usare il valore dal campo input
-                    
                     // Ottieni il tempo rimanente dal server
                     const remainingTime = zone.remaining_time;
                     
-                    // Cerca di ottenere la durata totale dalle informazioni della zona
-                    // Se il server non fornisce questa informazione, stimiamo in base al tempo rimanente
-					// Cerca di ottenere la durata totale dalle informazioni della zona
-					// Se il server non fornisce questa informazione, stimiamo in base al tempo rimanente
-					let totalDuration = remainingTime;
-					let elapsedTime = 0;
-
-					// Cerca info dal programma attivo per una stima migliore della durata totale
-					if (window.programsData && window.lastKnownState && 
-						window.lastKnownState.program_running && 
-						window.lastKnownState.current_program_id) {
-    
-						const programId = window.lastKnownState.current_program_id;
-						const program = window.programsData[programId];
-    
-						if (program && program.steps) {
-							// Cerca lo step corrispondente a questa zona
-							const currentStep = program.steps.find(s => s.zone_id === zone.id);
-							if (currentStep && currentStep.duration) {
-								// Durata totale in secondi
-								totalDuration = currentStep.duration * 60;
-								// Calcola il tempo trascorso con sicurezza
-								elapsedTime = Math.max(0, totalDuration - remainingTime);
-							} else {
-								// Fallback se non troviamo lo step
-								totalDuration = Math.max(600, remainingTime); // Assume 10 minuti default
-								elapsedTime = totalDuration - remainingTime;
-							}
-						} else {
-							// Calcolo generico
-							elapsedTime = totalDuration - remainingTime;
-						}
-					} else {
-						// Calcolo generico quando non c'è un programma attivo
-						elapsedTime = totalDuration - remainingTime;
-					}
-
-					// Assicuriamoci che la durata totale sia almeno pari al tempo rimanente
-					totalDuration = Math.max(totalDuration, remainingTime);
+                    // Cerchiamo la durata totale nel modo più affidabile possibile
+                    let totalDuration = 0;
+                    let elapsedTime = 0;
+                    
+                    // Caso 1: Se è un programma automatico
+                    if (window.lastKnownState && window.lastKnownState.program_running) {
+                        const programId = window.lastKnownState.current_program_id;
+                        if (window.programsData && window.programsData[programId] && window.programsData[programId].steps) {
+                            const steps = window.programsData[programId].steps;
+                            const currentStep = steps.find(s => s.zone_id === zone.id);
+                            if (currentStep && currentStep.duration) {
+                                totalDuration = currentStep.duration * 60; // Converti in secondi
+                            }
+                        }
+                    }
+                    
+                    // Caso 2: Se è un'attivazione manuale
+                    if (totalDuration === 0) {
+                        const durationInput = document.getElementById(`duration-${zone.id}`);
+                        if (durationInput && durationInput.value) {
+                            totalDuration = parseInt(durationInput.value) * 60; // Converti in secondi
+                        }
+                    }
+                    
+                    // Caso 3: Fallback se non riusciamo a determinare la durata
+                    if (totalDuration === 0 || isNaN(totalDuration)) {
+                        totalDuration = Math.max(600, remainingTime); // Default 10 minuti o il tempo rimanente
+                    }
+                    
+                    // Calcola il tempo trascorso
+                    elapsedTime = Math.max(0, totalDuration - remainingTime);
+                    
+                    // Memorizza la durata totale originale nella variabile globale per gli aggiornamenti futuri
+                    // Creiamo un oggetto per ogni zona con le informazioni necessarie
+                    if (!window.zoneTimers) window.zoneTimers = {};
+                    window.zoneTimers[zone.id] = {
+                        totalDuration: totalDuration,
+                        startTime: Date.now() - (elapsedTime * 1000)
+                    };
                     
                     // Aggiorna la barra di progresso
                     updateProgressBar(zone.id, elapsedTime, totalDuration, remainingTime);
+                } else {
+                    // Se c'è già un intervallo in corso, utilizziamo i dati memorizzati originali
+                    // anziché ricalcolare tutto
+                    if (window.zoneTimers && window.zoneTimers[zone.id]) {
+                        const zoneTimer = window.zoneTimers[zone.id];
+                        const totalDuration = zoneTimer.totalDuration;
+                        const elapsedTime = Math.max(0, totalDuration - zone.remaining_time);
+                        
+                        // Aggiorna solo il timer display, mantenendo intatta la barra di progresso
+                        updateTimerDisplay(zone.remaining_time, timerDisplay);
+                        
+                        // Aggiorna anche il valore della barra di progresso
+                        if (progressBar) {
+                            const progressValue = (elapsedTime / totalDuration) * 100;
+                            progressBar.value = progressValue;
+                        }
+                    }
                 }
             }
         } else {
@@ -305,6 +322,11 @@ function updateZonesUI(zonesStatus) {
                 if (progressBar && timerDisplay) {
                     progressBar.value = 0;
                     timerDisplay.textContent = '00:00';
+                }
+                
+                // Rimuovi anche l'informazione sul timer
+                if (window.zoneTimers && window.zoneTimers[zone.id]) {
+                    delete window.zoneTimers[zone.id];
                 }
             }
         }
