@@ -1,31 +1,17 @@
 // view_programs.js - Script per la pagina di visualizzazione programmi
 
 // =================== VARIABILI GLOBALI ===================
-// Verifica se la variabile è già stata dichiarata per evitare errori
-// in caso di ricarica dello script
-if (typeof window.programStatusInterval === 'undefined') {
-    window.programStatusInterval = null;      // Intervallo per il polling dello stato
-}
-if (typeof window.programsData === 'undefined') {
-    window.programsData = {};      // Cache dei dati dei programmi
-}
+window.programStatusInterval = null;       // Intervallo per il polling dello stato
+window.programsData = {};                  // Cache dei dati dei programmi
+window.zoneNameMap = {};                   // Mappatura ID zona -> nome zona
+window.lastKnownState = null;              // Ultimo stato conosciuto (per confronti)
+window.pollingAccelerated = false;         // Flag per indicare se il polling è accelerato
+window.retryInProgress = false;            // Flag per evitare richieste multiple contemporanee
 
-// Usa direttamente window.programsData in tutto il file
-window.zoneNameMap = {};                // Mappatura ID zona -> nome zona
-window.lastKnownState = null;           // Ultimo stato conosciuto (per confronti)
-window.pollingAccelerated = false;      // Flag per indicare se il polling è accelerato
-window.retryInProgress = false;         // Flag per evitare richieste multiple contemporanee
-
-// Costanti di configurazione - Usa variabili window per evitare ridichiarazioni
-if (typeof window.NORMAL_POLLING_INTERVAL === 'undefined') {
-    window.NORMAL_POLLING_INTERVAL = 5000;  // 5 secondi per il polling normale
-}
-if (typeof window.FAST_POLLING_INTERVAL === 'undefined') {
-    window.FAST_POLLING_INTERVAL = 1000;    // 1 secondo per il polling accelerato
-}
-if (typeof window.MAX_API_RETRIES === 'undefined') {
-    window.MAX_API_RETRIES = 3;             // Numero massimo di tentativi per le chiamate API
-}
+// Costanti di configurazione
+window.NORMAL_POLLING_INTERVAL = 5000;     // 5 secondi per il polling normale
+window.FAST_POLLING_INTERVAL = 1000;       // 1 secondo per il polling accelerato
+window.MAX_API_RETRIES = 3;                // Numero massimo di tentativi per le chiamate API
 
 // =================== INIZIALIZZAZIONE ===================
 
@@ -34,6 +20,9 @@ if (typeof window.MAX_API_RETRIES === 'undefined') {
  */
 function initializeViewProgramsPage() {
     console.log("Inizializzazione pagina visualizzazione programmi");
+    
+    // Aggiungi stili CSS per lo stato di loading
+    addCssStyles();
     
     // Carica i dati e mostra i programmi
     loadUserSettingsAndPrograms();
@@ -46,6 +35,86 @@ function initializeViewProgramsPage() {
     
     // Esponi la funzione di aggiornamento stato programma globalmente
     window.fetchProgramState = fetchProgramState;
+    
+    // Aggiungi listener globale per il click per assicurarsi che i pulsanti STOP funzionino sempre
+    document.addEventListener('click', function(e) {
+        // Trova il pulsante di stop o un suo elemento figlio
+        let target = e.target;
+        let stopBtn = null;
+        
+        // Se l'utente ha cliccato su un elemento all'interno del pulsante (es. icona o testo)
+        if (target.closest('.btn-stop:not(.disabled)')) {
+            stopBtn = target.closest('.btn-stop:not(.disabled)');
+        }
+        // Se l'utente ha cliccato direttamente sul pulsante
+        else if (target.classList && target.classList.contains('btn-stop') && !target.classList.contains('disabled')) {
+            stopBtn = target;
+        }
+        
+        // Se abbiamo trovato un pulsante stop attivo
+        if (stopBtn) {
+            console.log("Clic intercettato su pulsante STOP!");
+            stopProgram();
+            e.preventDefault();
+            e.stopPropagation();
+        }
+    });
+}
+
+/**
+ * Aggiunge stili CSS necessari per la pagina
+ */
+function addCssStyles() {
+    // Se non esiste già uno stile per la classe loading, aggiungilo
+    if (!document.getElementById('loading-button-style')) {
+        const style = document.createElement('style');
+        style.id = 'loading-button-style';
+        style.innerHTML = `
+            .btn.loading {
+                position: relative;
+                color: transparent !important;
+                pointer-events: none;
+            }
+            
+            .btn.loading::after {
+                content: "";
+                position: absolute;
+                width: 20px;
+                height: 20px;
+                top: 50%;
+                left: 50%;
+                margin-top: -10px;
+                margin-left: -10px;
+                border-radius: 50%;
+                border: 2px solid rgba(255, 255, 255, 0.3);
+                border-top-color: white;
+                animation: button-spin 1s linear infinite;
+            }
+            
+            @keyframes button-spin {
+                0% { transform: rotate(0deg); }
+                100% { transform: rotate(360deg); }
+            }
+            
+            /* STILI MIGLIORATI PER IL PULSANTE STOP ATTIVO */
+            .btn-stop:not(.disabled) {
+                background-color: #F44336 !important;
+                color: white !important;
+                border: 2px solid #B71C1C !important;
+                animation: pulsate-stop 2s infinite !important;
+                box-shadow: 0 0 10px rgba(244, 67, 54, 0.5) !important;
+                font-weight: bold !important;
+                pointer-events: auto !important;
+            }
+            
+            @keyframes pulsate-stop {
+                0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(244, 67, 54, 0.7); }
+                50% { transform: scale(1.05); box-shadow: 0 0 0 10px rgba(244, 67, 54, 0); }
+                100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(244, 67, 54, 0); }
+            }
+        `;
+        document.head.appendChild(style);
+    }
 }
 
 /**
@@ -93,6 +162,7 @@ function startProgramStatusPolling() {
         }
     });
 }
+
 /**
  * Ferma il polling dello stato dei programmi
  */
@@ -121,6 +191,8 @@ function fetchProgramState() {
                 // Salva l'ultimo stato conosciuto per confronti
                 const previousState = lastKnownState;
                 lastKnownState = state;
+                
+                console.log("Stato programma ricevuto:", state);
                 
                 // Aggiorna l'UI con il nuovo stato
                 updateProgramsUI(state);
@@ -232,11 +304,10 @@ function loadUserSettingsAndPrograms() {
         }
         
         // Salva i programmi per riferimento futuro
-// Salva i programmi per riferimento futuro
-			Object.assign(window.programsData, programs || {});
+        window.programsData = programs || {};
         
         // Ora che abbiamo tutti i dati necessari, possiamo renderizzare i programmi
-        renderProgramCards(programsData, state);
+        renderProgramCards(window.programsData, state);
     })
     .catch(error => {
         console.error('Errore nel caricamento dei dati:', error);
@@ -307,22 +378,23 @@ function renderProgramCards(programs, state) {
         // Get the automatic status (default to true for backward compatibility)
         const isAutomatic = program.automatic_enabled !== false;
         
-		// Prepara i pulsanti con stati corretti
-		const startButtonHtml = isActive 
-			? `<button class="btn btn-start disabled" onclick="startProgram('${programId}')" disabled>
-				<span class="btn-icon">▶</span> ON
-			   </button>`
-			: `<button class="btn btn-start" onclick="startProgram('${programId}')">
-				<span class="btn-icon">▶</span> ON
-			   </button>`;
-			   
-		const stopButtonHtml = isActive 
-			? `<button class="btn btn-stop" onclick="stopProgram()" style="pointer-events: auto;">
-				<span class="btn-icon">■</span> OFF
-			   </button>`
-			: `<button class="btn btn-stop disabled" disabled>
-				<span class="btn-icon">■</span> OFF
-			   </button>`;
+        // Prepara i pulsanti con stati corretti
+        const startButtonHtml = isActive 
+            ? `<button class="btn btn-start disabled" disabled title="Programma in esecuzione">
+                <span class="btn-icon">▶</span> ON
+               </button>`
+            : `<button class="btn btn-start" onclick="startProgram('${programId}')" title="Avvia programma">
+                <span class="btn-icon">▶</span> ON
+               </button>`;
+               
+        // IMPORTANTE: Il pulsante STOP deve essere sempre cliccabile quando un programma è in esecuzione
+        const stopButtonHtml = isActive 
+            ? `<button class="btn btn-stop" onclick="stopProgram()" title="Ferma programma">
+                <span class="btn-icon">■</span> OFF
+               </button>`
+            : `<button class="btn btn-stop disabled" disabled title="Nessun programma in esecuzione">
+                <span class="btn-icon">■</span> OFF
+               </button>`;
         
         // Card del programma
         const programCard = document.createElement('div');
@@ -406,10 +478,14 @@ function renderProgramCards(programs, state) {
     }
 }
 
-// Replace the updateProgramsUI function in view_programs.js
+/**
+ * Aggiorna l'interfaccia in base allo stato corrente
+ */
 function updateProgramsUI(state) {
     const currentProgramId = state.current_program_id;
     const programRunning = state.program_running;
+    
+    console.log(`Aggiornamento UI programmi - In esecuzione: ${programRunning}, ID: ${currentProgramId}`);
     
     // Aggiorna tutte le card dei programmi
     document.querySelectorAll('.program-card').forEach(card => {
@@ -447,18 +523,26 @@ function updateProgramsUI(state) {
 
         if (startBtn && stopBtn) {
             if (isActive) {
-                // Questo programma è attivo
+                // QUESTO PROGRAMMA È ATTIVO: IL PULSANTE STOP DEVE ESSERE ATTIVO!
+                
+                // 1. Disabilita il pulsante START (programma già in esecuzione)
                 startBtn.classList.add('disabled');
                 startBtn.disabled = true;
                 
+                // 2. ASSICURATI CHE IL PULSANTE STOP SIA ATTIVO
                 stopBtn.classList.remove('disabled');
                 stopBtn.disabled = false;
                 stopBtn.style.pointerEvents = 'auto';
+                stopBtn.style.cursor = 'pointer';
+                stopBtn.style.opacity = '1';
                 
-                // Assicurati che l'onClick sia impostato correttamente
+                // 3. Assicurati che abbia l'onclick corretto
                 if (stopBtn.getAttribute('onclick') !== "stopProgram()") {
                     stopBtn.setAttribute('onclick', "stopProgram()");
                 }
+                
+                // 4. Aggiungi un titolo esplicativo
+                stopBtn.title = "Ferma programma in esecuzione";
             } else if (programRunning) {
                 // Un altro programma è attivo
                 startBtn.classList.add('disabled');
@@ -467,7 +551,6 @@ function updateProgramsUI(state) {
                 stopBtn.classList.add('disabled');
                 stopBtn.disabled = true;
                 stopBtn.style.pointerEvents = 'none';
-                stopBtn.removeAttribute('onclick');
             } else {
                 // Nessun programma è attivo
                 startBtn.classList.remove('disabled');
@@ -476,7 +559,6 @@ function updateProgramsUI(state) {
                 stopBtn.classList.add('disabled');
                 stopBtn.disabled = true;
                 stopBtn.style.pointerEvents = 'none';
-                stopBtn.removeAttribute('onclick');
             }
         }
     });
@@ -486,7 +568,6 @@ function updateProgramsUI(state) {
  * Aggiorna le informazioni dettagliate sul programma in esecuzione
  * @param {Object} state - Stato del programma
  */
-// Update or add this function in view_programs.js
 function updateRunningProgramStatus(state) {
     // Ottieni il div per il programma attivo, se esiste
     const activeCard = document.querySelector(`.program-card[data-program-id="${state.current_program_id}"]`);
@@ -516,17 +597,17 @@ function updateRunningProgramStatus(state) {
         const seconds = remainingSeconds % 60;
         const formattedTime = `${minutes}:${seconds.toString().padStart(2, '0')}`;
         
-        // Determina l'avanzamento della zona attiva - calcolo corretto percentuale
+        // Determina l'avanzamento della zona attiva
         let progressPercentage = 0;
         const steps = window.programsData[state.current_program_id]?.steps || [];
-        const currentStep = steps.find(step => step.zone_id === state.active_zone.id);
+        const currentStep = steps.find(step => parseInt(step.zone_id) === parseInt(state.active_zone.id));
         
         if (currentStep) {
             const totalSeconds = currentStep.duration * 60;
             const elapsedSeconds = totalSeconds - remainingSeconds;
             progressPercentage = Math.min(Math.max((elapsedSeconds / totalSeconds) * 100, 0), 100);
         } else {
-            // Fallback, dovrebbe sempre trovare lo step corrispondente
+            // Fallback
             progressPercentage = calculateProgressPercentage(remainingSeconds);
         }
         
@@ -535,7 +616,7 @@ function updateRunningProgramStatus(state) {
             <div style="font-weight: 600; margin-bottom: 5px;">Stato di Esecuzione:</div>
             <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
                 <span>Zona Attiva:</span>
-                <span>${state.active_zone.name}</span>
+                <span>${state.active_zone.name || `Zona ${state.active_zone.id + 1}`}</span>
             </div>
             <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
                 <span>Tempo Rimanente:</span>
@@ -656,7 +737,7 @@ function startProgram(programId) {
     
     const startBtn = document.querySelector(`.program-card[data-program-id="${programId}"] .btn-start`);
     if (startBtn) {
-        startBtn.classList.add('disabled');
+        startBtn.classList.add('loading');
         startBtn.disabled = true;
     }
     
@@ -677,6 +758,10 @@ function startProgram(programId) {
         })
         .then(data => {
             retryInProgress = false;
+            
+            if (startBtn) {
+                startBtn.classList.remove('loading');
+            }
             
             if (data.success) {
                 if (typeof showToast === 'function') {
@@ -710,14 +795,13 @@ function startProgram(programId) {
             } else {
                 retryInProgress = false;
                 
-                if (typeof showToast === 'function') {
-                    showToast("Errore di rete durante l'avvio del programma", 'error');
+                if (startBtn) {
+                    startBtn.classList.remove('loading');
+                    startBtn.disabled = false;
                 }
                 
-                // Riabilita il pulsante dopo il numero massimo di tentativi
-                if (startBtn) {
-                    startBtn.classList.remove('disabled');
-                    startBtn.disabled = false;
+                if (typeof showToast === 'function') {
+                    showToast("Errore di rete durante l'avvio del programma", 'error');
                 }
             }
         });
@@ -732,20 +816,33 @@ function startProgram(programId) {
  */
 function stopProgram() {
     // Previeni clic multipli
-    if (retryInProgress) return;
+    if (retryInProgress) {
+        console.log("Operazione già in corso, ignorata");
+        return;
+    }
+    
+    console.log("Tentativo di arrestare il programma");
     retryInProgress = true;
     
-	// Disabilita solo i pulsanti stop dei programmi NON attivi
-	const stopBtns = document.querySelectorAll('.btn-stop:not(.disabled)');
-	stopBtns.forEach(btn => {
-		btn.classList.add('disabled');
-		btn.disabled = true;
-	});
+    // Trova il pulsante di stop attivo
+    const activeCard = document.querySelector('.program-card.active-program');
+    const stopBtn = activeCard ? activeCard.querySelector('.btn-stop') : null;
+    
+    // Imposta lo stato visual del pulsante
+    if (stopBtn) {
+        console.log("Pulsante STOP trovato, impostazione stato loading");
+        stopBtn.classList.add('loading');
+        stopBtn.disabled = true;
+    } else {
+        console.log("AVVISO: Pulsante STOP non trovato");
+    }
     
     // Tenta più volte la richiesta in caso di errore di rete
     let retryCount = 0;
     
     function attemptStopProgram() {
+        console.log(`Tentativo ${retryCount + 1} di arrestare il programma`);
+        
         fetch('/stop_program', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' }
@@ -759,23 +856,24 @@ function stopProgram() {
         .then(data => {
             retryInProgress = false;
             
+            if (stopBtn) {
+                stopBtn.classList.remove('loading');
+                stopBtn.disabled = false;
+            }
+            
             if (data.success) {
+                console.log("Programma arrestato con successo");
                 if (typeof showToast === 'function') {
                     showToast('Programma arrestato con successo', 'success');
                 }
                 // Aggiorna immediatamente l'interfaccia
                 fetchProgramState();
             } else {
+                console.error(`Errore nell'arresto del programma: ${data.error || 'Errore sconosciuto'}`);
                 if (typeof showToast === 'function') {
                     showToast(`Errore nell'arresto del programma: ${data.error || 'Errore sconosciuto'}`, 'error');
                 }
             }
-            
-            // Riabilita i pulsanti
-            stopBtns.forEach(btn => {
-                btn.classList.remove('disabled');
-                btn.disabled = false;
-            });
         })
         .catch(error => {
             console.error("Errore durante l'arresto del programma:", error);
@@ -783,22 +881,21 @@ function stopProgram() {
             // Tenta nuovamente se non abbiamo raggiunto il numero massimo di tentativi
             if (retryCount < MAX_API_RETRIES) {
                 retryCount++;
-                console.log(`Tentativo di arrestare il programma ${retryCount}/${MAX_API_RETRIES}`);
+                console.log(`Nuovo tentativo di arrestare il programma ${retryCount}/${MAX_API_RETRIES}`);
                 
                 // Ritenta dopo un breve ritardo (con aumenti progressivi)
                 setTimeout(attemptStopProgram, 500 * retryCount);
             } else {
                 retryInProgress = false;
                 
+                if (stopBtn) {
+                    stopBtn.classList.remove('loading');
+                    stopBtn.disabled = false;
+                }
+                
                 if (typeof showToast === 'function') {
                     showToast("Errore di rete durante l'arresto del programma", 'error');
                 }
-                
-                // Riabilita i pulsanti dopo il numero massimo di tentativi
-                stopBtns.forEach(btn => {
-                    btn.classList.remove('disabled');
-                    btn.disabled = false;
-                });
             }
         });
     }
@@ -974,8 +1071,8 @@ function toggleProgramAutomatic(programId, enable) {
             }
             
             // Aggiorna i dati salvati localmente
-            if (programsData[programId]) {
-                programsData[programId].automatic_enabled = enable;
+            if (window.programsData[programId]) {
+                window.programsData[programId].automatic_enabled = enable;
             }
         } else {
             if (typeof showToast === 'function') {
@@ -1006,4 +1103,7 @@ function toggleProgramAutomatic(programId, enable) {
 }
 
 // Inizializzazione al caricamento del documento
-document.addEventListener('DOMContentLoaded', initializeViewProgramsPage);
+document.addEventListener('DOMContentLoaded', function() {
+    console.log("DOMContentLoaded: Avvio inizializzazione view_programs");
+    initializeViewProgramsPage();
+});

@@ -1,26 +1,27 @@
-// manual.js - Script per la pagina di controllo manuale
+// manual.js - Completamente riscritto da zero
+// Controllo manuale delle zone di irrigazione
 
-// Variabili globali
-var maxActiveZones = 3;
-var maxZoneDuration = 180; // durata massima in minuti
-var progressIntervals = {};
-// Variabili globali aggiuntive
-window.programsData = {}; // Cache dei dati programmi
-window.lastKnownState = null; // Ultimo stato conosciuto
-window.zoneTimers = {}; // Per memorizzare i timer originali delle zone attive
+// ====================== VARIABILI GLOBALI ======================
+let userSettings = {}; // Impostazioni utente
+let maxZoneDuration = 180; // Durata massima in minuti (default)
+let maxActiveZones = 3; // Numero massimo di zone attive (default)
+let zoneStatusInterval = null; // Intervallo di polling stato zone
+let activeZones = {}; // Stato corrente delle zone attive con timer
+let disabledManualMode = false; // Flag per disabilitare la modalità manuale
+const POLL_INTERVAL = 3000; // Intervallo di polling in millisecondi
 
-// Modifica alla funzione initializeManualPage
+// ====================== INIZIALIZZAZIONE ======================
 function initializeManualPage(userData) {
     console.log("Inizializzazione pagina controllo manuale");
-    
+
+    // Carica impostazioni utente
     if (userData && Object.keys(userData).length > 0) {
         userSettings = userData;
-        // Carica maxActiveZones dalle impostazioni utente
         maxActiveZones = userData.max_active_zones || 3;
         maxZoneDuration = userData.max_zone_duration || 180;
         renderZones(userData.zones || []);
     } else {
-        // Se userData non è disponibile, carica le impostazioni dal server
+        // Carica impostazioni dal server
         fetch('/data/user_settings.json')
             .then(response => {
                 if (!response.ok) throw new Error('Errore nel caricamento delle impostazioni utente');
@@ -37,82 +38,144 @@ function initializeManualPage(userData) {
                 showToast('Errore nel caricamento delle impostazioni', 'error');
             });
     }
-   
-       // Carica i dati dei programmi per riferimento alla durata delle zone
-    loadProgramsData();
-	
-    // Avvia il polling per l'aggiornamento dello stato delle zone
-    startZoneStatusPolling();
     
-    // Pulisci quando si cambia pagina (window.onbeforeunload non funziona bene su ESP32)
+    // Aggiungi stili CSS
+    addManualStyles();
+    
+    // Avvia il polling dello stato
+    startStatusPolling();
+    
+    // Pulizia quando si cambia pagina
     window.addEventListener('pagehide', cleanupManualPage);
 }
 
-// Nuova funzione per caricare i dati dei programmi
-function loadProgramsData() {
-    fetch('/data/program.json')
-        .then(response => {
-            if (!response.ok) throw new Error('Errore nel caricamento dei programmi');
-            return response.json();
-        })
-        .then(programs => {
-            window.programsData = programs || {};
-            console.log("Dati programmi caricati per riferimento durata zone");
+// Aggiunge stili necessari
+function addManualStyles() {
+    if (!document.getElementById('manual-styles')) {
+        const style = document.createElement('style');
+        style.id = 'manual-styles';
+        
+        style.innerHTML = `
+            .zone-card.disabled-mode {
+                opacity: 0.6;
+                pointer-events: none;
+                position: relative;
+            }
             
-            // Dopo aver caricato i programmi, ottieni lo stato corrente
-            return fetch('/get_program_state');
-        })
-        .then(response => {
-            if (!response.ok) throw new Error('Errore nel caricamento dello stato del programma');
-            return response.json();
-        })
-        .then(state => {
-            window.lastKnownState = state;
-            console.log("Stato programma caricato:", state);
-        })
-        .catch(error => {
-            console.error('Errore nel caricamento dei dati di riferimento:', error);
-        });
+            .manual-page-overlay {
+                position: fixed;
+                top: 60px;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background-color: rgba(0, 0, 0, 0.5);
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                z-index: 1000;
+            }
+            
+            .overlay-message {
+                background-color: #fff;
+                border-radius: 8px;
+                padding: 20px;
+                max-width: 80%;
+                text-align: center;
+                box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+            }
+            
+            .overlay-message h3 {
+                color: #ff3333;
+                margin-top: 0;
+            }
+            
+            .overlay-message p {
+                margin-bottom: 0;
+            }
+            
+            .zone-card input::placeholder {
+                color: #999;
+                opacity: 1;
+            }
+            
+            .zone-card.active {
+                border: 2px solid #00cc66;
+                box-shadow: 0 0 15px rgba(0, 204, 102, 0.5);
+            }
+            
+            .loading-indicator {
+                position: relative;
+                color: transparent !important;
+                pointer-events: none;
+            }
+            
+            .loading-indicator::after {
+                content: "";
+                position: absolute;
+                width: 20px;
+                height: 20px;
+                top: 50%;
+                left: 50%;
+                margin-top: -10px;
+                margin-left: -10px;
+                border-radius: 50%;
+                border: 3px solid rgba(0, 0, 0, 0.1);
+                border-top-color: #00cc66;
+                animation: spin 1s linear infinite;
+            }
+            
+            @keyframes spin {
+                0% { transform: rotate(0deg); }
+                100% { transform: rotate(360deg); }
+            }
+        `;
+        
+        document.head.appendChild(style);
+    }
 }
 
-// Funzione per avviare il polling dello stato delle zone
-function startZoneStatusPolling() {
-    // Esegui immediatamente e poi ogni 5 secondi (invece di 3)
+// Avvia il polling dello stato
+function startStatusPolling() {
+    // Esegui subito la prima volta
     fetchZonesStatus();
-    zoneStatusInterval = setInterval(fetchZonesStatus, 5000);
-    console.log("Polling zone avviato");
+    
+    // Imposta l'intervallo di polling
+    zoneStatusInterval = setInterval(fetchZonesStatus, POLL_INTERVAL);
+    console.log("Polling stato zone avviato");
 }
 
-// Funzione per fermare il polling
-function stopZoneStatusPolling() {
+// Ferma il polling dello stato
+function stopStatusPolling() {
     if (zoneStatusInterval) {
         clearInterval(zoneStatusInterval);
         zoneStatusInterval = null;
-        console.log("Polling zone fermato");
+        console.log("Polling stato zone fermato");
     }
 }
 
-// Pulisci quando si cambia pagina
+// Pulisce le risorse
 function cleanupManualPage() {
-    stopZoneStatusPolling();
+    stopStatusPolling();
     
-    // Pulisci gli intervalli di progresso
-    for (const id in progressIntervals) {
-        if (progressIntervals[id]) {
-            clearInterval(progressIntervals[id]);
+    // Rimuovi tutti i timer
+    Object.keys(activeZones).forEach(zoneId => {
+        if (activeZones[zoneId].timer) {
+            clearInterval(activeZones[zoneId].timer);
         }
-    }
-    progressIntervals = {};
+    });
+    
+    activeZones = {};
 }
 
-// Renderizza le zone basate sulle impostazioni utente
+// ====================== RENDERING INTERFACCIA ======================
+// Renderizza le zone
 function renderZones(zones) {
     console.log("Renderizzazione zone:", zones);
     
     const container = document.getElementById('zone-container');
     if (!container) return;
     
-    // Filtra solo le zone visibili (status: "show")
+    // Filtra solo le zone visibili
     const visibleZones = Array.isArray(zones) ? zones.filter(zone => zone && zone.status === "show") : [];
     
     if (visibleZones.length === 0) {
@@ -137,333 +200,144 @@ function renderZones(zones) {
         zoneCard.className = 'zone-card';
         zoneCard.id = `zone-${zone.id}`;
         
-        // Per impostare correttamente il valore di default e il massimo dell'input durata
-        const defaultDuration = Math.min(10, maxZoneDuration);
+        const defaultDuration = 10; // Valore di default per l'input durata
         
-		zoneCard.innerHTML = `
-			<h3>${zone.name || `Zona ${zone.id + 1}`}</h3>
-			<div class="input-container">
-				<input type="number" id="duration-${zone.id}" placeholder="Durata (minuti)" 
-					min="1" max="${maxZoneDuration}">
-				<div class="toggle-switch">
-					<label class="switch">
-						<input type="checkbox" id="toggle-${zone.id}" class="zone-toggle" data-zone-id="${zone.id}">
-						<span class="slider"></span>
-					</label>
-				</div>
-			</div>
-			<div class="progress-container">
-				<progress id="progress-${zone.id}" value="0" max="100"></progress>
-				<div class="timer-display" id="timer-${zone.id}">00:00</div>
-			</div>
-		`;
+        zoneCard.innerHTML = `
+            <h3>${zone.name || `Zona ${zone.id + 1}`}</h3>
+            <div class="input-container">
+                <input type="number" id="duration-${zone.id}" placeholder="Durata (minuti)" 
+                    min="1" max="${maxZoneDuration}" value="${defaultDuration}">
+                <div class="toggle-switch">
+                    <label class="switch">
+                        <input type="checkbox" id="toggle-${zone.id}" class="zone-toggle" data-zone-id="${zone.id}">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </div>
+            <div class="progress-container">
+                <progress id="progress-${zone.id}" value="0" max="100" style="width: 100%;"></progress>
+                <div class="timer-display" id="timer-${zone.id}">00:00</div>
+            </div>
+        `;
+        
         container.appendChild(zoneCard);
     });
     
-    // Aggiungi i listener dopo aver creato gli elementi
-    attachZoneToggleFunctions();
+    // Aggiungi gestori eventi
+    addZoneEventListeners();
     
-    // Carica subito lo stato delle zone
+    // Aggiorna immediatamente lo stato
     fetchZonesStatus();
 }
 
-// Modifica alla funzione fetchZonesStatus per aggiornare anche lo stato del programma
-function fetchZonesStatus() {
-    fetch('/get_zones_status')
-        .then(response => {
-            if (!response.ok) throw new Error(`Errore HTTP: ${response.status}`);
-            return response.json();
-        })
-        .then(zonesStatus => {
-            console.log("Stato zone ricevuto:", zonesStatus);
-            if (Array.isArray(zonesStatus)) {
-                updateZonesUI(zonesStatus);
+// Aggiungi gestori eventi
+function addZoneEventListeners() {
+    document.querySelectorAll('.zone-toggle').forEach(toggle => {
+        toggle.addEventListener('change', function(event) {
+            // Se la pagina è disabilitata, non fare nulla
+            if (disabledManualMode) {
+                event.preventDefault();
+                return false;
+            }
+            
+            const zoneId = parseInt(event.target.getAttribute('data-zone-id'));
+            const isActive = event.target.checked;
+            
+            if (isActive) {
+                // Attiva la zona
+                const durationInput = document.getElementById(`duration-${zoneId}`);
+                const duration = durationInput ? parseInt(durationInput.value) : 0;
+                
+                if (!duration || isNaN(duration) || duration <= 0 || duration > maxZoneDuration) {
+                    showToast(`Inserisci una durata valida tra 1 e ${maxZoneDuration} minuti`, 'warning');
+                    event.target.checked = false;
+                    return;
+                }
+                
+                activateZone(zoneId, duration);
             } else {
-                console.error("Formato di risposta non valido per lo stato delle zone");
+                // Disattiva la zona
+                deactivateZone(zoneId);
             }
-            
-            // Aggiorna anche lo stato del programma
-            return fetch('/get_program_state');
-        })
-        .then(response => {
-            if (!response.ok) throw new Error('Errore nel caricamento dello stato del programma');
-            return response.json();
-        })
-        .then(state => {
-            window.lastKnownState = state;
-        })
-        .catch(error => {
-            console.error('Errore nel recupero dello stato delle zone:', error);
-            // Non aggiorniamo l'UI in caso di errore per evitare visualizzazioni errate
         });
-}
-
-// Nel file web/manual.js
-// Modifica alla funzione updateZonesUI - sezione che gestisce la barra di progresso
-
-// In manual.js, sostituire la funzione updateZonesUI:
-
-// Nel file web/manual.js
-// Modifica alla funzione updateZonesUI - sezione che gestisce la barra di progresso
-
-function updateZonesUI(zonesStatus) {
-    if (!Array.isArray(zonesStatus)) return;
-    
-    zonesStatus.forEach(zone => {
-        if (!zone || zone.id === undefined) return;
-                
-        const toggle = document.getElementById(`toggle-${zone.id}`);
-        const zoneCard = document.getElementById(`zone-${zone.id}`);
-        
-        if (!toggle || !zoneCard) return;
-        
-        // Aggiorna lo stato del toggle senza innescare l'evento change
-        const isCurrentlyChecked = toggle.checked;
-        if (isCurrentlyChecked !== zone.active) {
-            // Rimuovi temporaneamente l'event listener
-            const originalOnChange = toggle.onchange;
-            toggle.onchange = null;
-            
-            // Cambia lo stato
-            toggle.checked = zone.active;
-            
-            // Ripristina l'event listener
-            setTimeout(() => {
-                toggle.onchange = originalOnChange;
-            }, 0);
-        }
-        
-        // Aggiorna la classe visiva della card
-        if (zone.active) {
-            zoneCard.classList.add('active');
-        } else {
-            zoneCard.classList.remove('active');
-        }
-        
-        // Aggiorna la barra di progresso se la zona è attiva
-        if (zone.active) {
-            const progressBar = document.getElementById(`progress-${zone.id}`);
-            const timerDisplay = document.getElementById(`timer-${zone.id}`);
-            
-            if (progressBar && timerDisplay) {
-                // Se non c'è già un intervallo in corso per questa zona, creane uno
-                if (!progressIntervals[zone.id]) {
-                    // Ottieni il tempo rimanente dal server
-                    const remainingTime = zone.remaining_time;
-                    
-                    // Cerchiamo la durata totale nel modo più affidabile possibile
-                    let totalDuration = 0;
-                    let elapsedTime = 0;
-                    
-                    // Caso 1: Se è un programma automatico
-                    if (window.lastKnownState && window.lastKnownState.program_running) {
-                        const programId = window.lastKnownState.current_program_id;
-                        if (window.programsData && window.programsData[programId] && window.programsData[programId].steps) {
-                            const steps = window.programsData[programId].steps;
-                            const currentStep = steps.find(s => s.zone_id === zone.id);
-                            if (currentStep && currentStep.duration) {
-                                totalDuration = currentStep.duration * 60; // Converti in secondi
-                            }
-                        }
-                    }
-                    
-                    // Caso 2: Se è un'attivazione manuale
-                    if (totalDuration === 0) {
-                        const durationInput = document.getElementById(`duration-${zone.id}`);
-                        if (durationInput && durationInput.value) {
-                            totalDuration = parseInt(durationInput.value) * 60; // Converti in secondi
-                        }
-                    }
-                    
-                    // Caso 3: Fallback se non riusciamo a determinare la durata
-                    if (totalDuration === 0 || isNaN(totalDuration)) {
-                        totalDuration = Math.max(600, remainingTime); // Default 10 minuti o il tempo rimanente
-                    }
-                    
-                    // Calcola il tempo trascorso
-                    elapsedTime = Math.max(0, totalDuration - remainingTime);
-                    
-                    // Memorizza la durata totale originale nella variabile globale per gli aggiornamenti futuri
-                    // Creiamo un oggetto per ogni zona con le informazioni necessarie
-                    if (!window.zoneTimers) window.zoneTimers = {};
-                    window.zoneTimers[zone.id] = {
-                        totalDuration: totalDuration,
-                        startTime: Date.now() - (elapsedTime * 1000)
-                    };
-                    
-                    // Aggiorna la barra di progresso
-                    updateProgressBar(zone.id, elapsedTime, totalDuration, remainingTime);
-                } else {
-                    // Se c'è già un intervallo in corso, utilizziamo i dati memorizzati originali
-                    // anziché ricalcolare tutto
-                    if (window.zoneTimers && window.zoneTimers[zone.id]) {
-                        const zoneTimer = window.zoneTimers[zone.id];
-                        const totalDuration = zoneTimer.totalDuration;
-                        const elapsedTime = Math.max(0, totalDuration - zone.remaining_time);
-                        
-                        // Aggiorna solo il timer display, mantenendo intatta la barra di progresso
-                        updateTimerDisplay(zone.remaining_time, timerDisplay);
-                        
-                        // Aggiorna anche il valore della barra di progresso
-                        if (progressBar) {
-                            const progressValue = (elapsedTime / totalDuration) * 100;
-                            progressBar.value = progressValue;
-                        }
-                    }
-                }
-            }
-        } else {
-            // Se la zona non è attiva ma c'è un intervallo in corso, fermalo
-            if (progressIntervals[zone.id]) {
-                clearInterval(progressIntervals[zone.id]);
-                delete progressIntervals[zone.id];
-                
-                // Resetta la barra di progresso
-                const progressBar = document.getElementById(`progress-${zone.id}`);
-                const timerDisplay = document.getElementById(`timer-${zone.id}`);
-                
-                if (progressBar && timerDisplay) {
-                    progressBar.value = 0;
-                    timerDisplay.textContent = '00:00';
-                }
-                
-                // Rimuovi anche l'informazione sul timer
-                if (window.zoneTimers && window.zoneTimers[zone.id]) {
-                    delete window.zoneTimers[zone.id];
-                }
-            }
-        }
     });
 }
 
-// Aggiorna la barra di progresso
-function updateProgressBar(zoneId, elapsedTime, totalTime, remainingTime) {
-    const progressBar = document.getElementById(`progress-${zoneId}`);
-    const timerDisplay = document.getElementById(`timer-${zoneId}`);
+// Attiva una zona
+function activateZone(zoneId, duration) {
+    console.log(`Attivazione zona ${zoneId} per ${duration} minuti`);
     
-    if (!progressBar || !timerDisplay) return;
-    
-    // Imposta il valore iniziale
-    const progressValue = (elapsedTime / totalTime) * 100;
-    progressBar.value = progressValue;
-    updateTimerDisplay(remainingTime, timerDisplay);
-    
-    // Cancella l'intervallo esistente se presente
-    if (progressIntervals[zoneId]) {
-        clearInterval(progressIntervals[zoneId]);
-    }
-    
-    // Crea un nuovo intervallo
-    progressIntervals[zoneId] = setInterval(() => {
-        elapsedTime++;
-        remainingTime--;
-        
-        if (remainingTime <= 0) {
-            clearInterval(progressIntervals[zoneId]);
-            delete progressIntervals[zoneId];
-            progressBar.value = 0;
-            timerDisplay.textContent = '00:00';
-            
-            // Aggiorna lo stato del toggle
-            const toggle = document.getElementById(`toggle-${zoneId}`);
-            if (toggle) toggle.checked = false;
-            
-            // Aggiorna la classe visiva della card
-            const zoneCard = document.getElementById(`zone-${zoneId}`);
-            if (zoneCard) zoneCard.classList.remove('active');
-            
-            return;
-        }
-        
-        const newProgressValue = (elapsedTime / totalTime) * 100;
-        progressBar.value = newProgressValue;
-        updateTimerDisplay(remainingTime, timerDisplay);
-    }, 1000);
-}
-
-// Aggiorna il display del timer
-function updateTimerDisplay(timeInSeconds, displayElement) {
-    const minutes = Math.floor(timeInSeconds / 60);
-    const seconds = Math.floor(timeInSeconds % 60);
-    const formattedTime = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-    displayElement.textContent = formattedTime;
-}
-
-// Funzione per avviare una zona
-function startZone(zoneId, duration) {
-    console.log(`Tentativo di avvio zona ${zoneId} per ${duration} minuti`);
-    
-    // Verifica validità della durata
-    if (isNaN(duration) || duration <= 0 || duration > maxZoneDuration) {
-        showToast(`La durata deve essere tra 1 e ${maxZoneDuration} minuti`, 'warning');
-        const toggle = document.getElementById(`toggle-${zoneId}`);
-        if (toggle) toggle.checked = false;
-        return;
-    }
-    
-    // Aggiungi classe loading e disabilita il toggle
+    // Imposta loading state
     const toggle = document.getElementById(`toggle-${zoneId}`);
-    if (toggle) {
-        toggle.disabled = true;
-    }
-    
     const zoneCard = document.getElementById(`zone-${zoneId}`);
-    if (zoneCard) {
-        zoneCard.classList.add('loading');
-    }
-
+    const durationInput = document.getElementById(`duration-${zoneId}`);
+    
+    if (toggle) toggle.disabled = true;
+    if (zoneCard) zoneCard.classList.add('loading-indicator');
+    if (durationInput) durationInput.disabled = true;
+    
     fetch('/start_zone', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ zone_id: zoneId, duration: duration })
     })
     .then(response => {
-        // Riabilita il toggle
-        if (toggle) toggle.disabled = false;
-        if (zoneCard) zoneCard.classList.remove('loading');
-        
-        if (!response.ok) {
-            throw new Error(`Errore HTTP: ${response.status}`);
-        }
+        if (!response.ok) throw new Error(`Errore HTTP: ${response.status}`);
         return response.json();
     })
     .then(data => {
-        console.log("Risposta dal server:", data);
+        // Rimuovi loading state
+        if (zoneCard) zoneCard.classList.remove('loading-indicator');
         
-        if (!data.success) {
-            throw new Error(data.error || 'Errore durante l\'avvio della zona');
+        if (data.success) {
+            showToast(`Zona ${zoneId + 1} attivata per ${duration} minuti`, 'success');
+            
+            // Aggiorna lo stato locale
+            const durationSeconds = duration * 60;
+            
+            // Inizializza monitoraggio locale della zona attivata
+            startZoneTimer(zoneId, durationSeconds);
+            
+            // Aggiorna l'UI
+            if (zoneCard) zoneCard.classList.add('active');
+            if (durationInput) durationInput.disabled = true;
+            
+            fetchZonesStatus(); // Aggiorna lo stato dal server
+        } else {
+            showToast(`Errore: ${data.error || 'Attivazione zona fallita'}`, 'error');
+            
+            // Reset UI in caso di errore
+            if (toggle) {
+                toggle.checked = false;
+                toggle.disabled = false;
+            }
+            if (durationInput) durationInput.disabled = false;
         }
-        
-        console.log(`Zona ${zoneId} avviata per ${duration} minuti.`);
-        showToast(`Zona ${zoneId + 1} avviata per ${duration} minuti`, 'success');
-        
-        // La risposta positiva verrà gestita dall'aggiornamento automatico dello stato
-        fetchZonesStatus();
     })
     .catch(error => {
-        console.error('Errore durante l\'avvio della zona:', error);
-        showToast(`Errore: ${error.message}`, 'error');
+        console.error('Errore durante l\'attivazione della zona:', error);
+        showToast('Errore di rete durante l\'attivazione della zona', 'error');
         
-        // Riporta il toggle allo stato OFF
-        if (toggle) toggle.checked = false;
-        
-        // Aggiorna lo stato per sicurezza
-        fetchZonesStatus();
+        // Reset UI in caso di errore
+        if (toggle) {
+            toggle.checked = false;
+            toggle.disabled = false;
+        }
+        if (zoneCard) zoneCard.classList.remove('loading-indicator');
+        if (durationInput) durationInput.disabled = false;
     });
 }
 
-// Funzione per fermare una zona
-function stopZone(zoneId) {
-    // Aggiungi classe loading e disabilita il toggle
-    const toggle = document.getElementById(`toggle-${zoneId}`);
-    if (toggle) {
-        toggle.disabled = true;
-    }
+// Disattiva una zona
+function deactivateZone(zoneId) {
+    console.log(`Disattivazione zona ${zoneId}`);
     
+    // Imposta loading state
+    const toggle = document.getElementById(`toggle-${zoneId}`);
     const zoneCard = document.getElementById(`zone-${zoneId}`);
-    if (zoneCard) {
-        zoneCard.classList.add('loading');
-    }
+    
+    if (toggle) toggle.disabled = true;
+    if (zoneCard) zoneCard.classList.add('loading-indicator');
     
     fetch('/stop_zone', {
         method: 'POST',
@@ -471,74 +345,334 @@ function stopZone(zoneId) {
         body: JSON.stringify({ zone_id: zoneId })
     })
     .then(response => {
-        // Riabilita il toggle
-        if (toggle) toggle.disabled = false;
-        if (zoneCard) zoneCard.classList.remove('loading');
-        
-        if (!response.ok) {
-            throw new Error(`Errore HTTP: ${response.status}`);
-        }
+        if (!response.ok) throw new Error(`Errore HTTP: ${response.status}`);
         return response.json();
     })
     .then(data => {
-        if (!data.success) {
-            throw new Error(data.error || 'Errore durante l\'arresto della zona');
+        // Rimuovi loading state
+        if (zoneCard) zoneCard.classList.remove('loading-indicator');
+        
+        if (data.success) {
+            showToast(`Zona ${zoneId + 1} disattivata`, 'info');
+            
+            // Ferma il timer locale
+            stopZoneTimer(zoneId);
+            
+            // Aggiorna l'UI
+            if (zoneCard) zoneCard.classList.remove('active');
+            const durationInput = document.getElementById(`duration-${zoneId}`);
+            if (durationInput) durationInput.disabled = false;
+            
+            // Reset barra di progresso
+            resetProgressBar(zoneId);
+            
+            if (toggle) toggle.disabled = false;
+            
+            fetchZonesStatus(); // Aggiorna lo stato dal server
+        } else {
+            showToast(`Errore: ${data.error || 'Disattivazione zona fallita'}`, 'error');
+            
+            // Reset UI in caso di errore
+            if (toggle) {
+                toggle.checked = true;
+                toggle.disabled = false;
+            }
         }
-        
-        console.log(`Zona ${zoneId} arrestata.`);
-        showToast(`Zona ${zoneId + 1} arrestata`, 'info');
-        
-        // La risposta positiva verrà gestita dall'aggiornamento automatico dello stato
-        fetchZonesStatus();
     })
     .catch(error => {
-        console.error('Errore durante l\'arresto della zona:', error);
-        showToast(`Errore: ${error.message}`, 'error');
+        console.error('Errore durante la disattivazione della zona:', error);
+        showToast('Errore di rete durante la disattivazione della zona', 'error');
         
-        // Ripristina lo stato precedente
+        // Reset UI in caso di errore
         if (toggle) {
             toggle.checked = true;
             toggle.disabled = false;
         }
-        
-        // Aggiorna lo stato per sicurezza
-        fetchZonesStatus();
+        if (zoneCard) zoneCard.classList.remove('loading-indicator');
     });
 }
 
-// Aggiungi i listener agli elementi toggle
-function attachZoneToggleFunctions() {
-    const zoneToggles = document.querySelectorAll('.zone-toggle');
-    console.log('Numero di toggle zone trovati:', zoneToggles.length);
+// ====================== GESTIONE TIMER E PROGRESS BAR ======================
+// Avvia il timer per una zona
+function startZoneTimer(zoneId, totalSeconds) {
+    const zoneId_str = zoneId.toString();
     
-    zoneToggles.forEach(toggle => {
-        toggle.addEventListener('change', event => {
-            const zoneId = parseInt(event.target.getAttribute('data-zone-id'));
-            const isChecked = event.target.checked;
+    // Ferma il timer esistente se presente
+    if (activeZones[zoneId_str] && activeZones[zoneId_str].timer) {
+        clearInterval(activeZones[zoneId_str].timer);
+    }
+    
+    // Memorizza i dati della zona
+    activeZones[zoneId_str] = {
+        totalDuration: totalSeconds,
+        remainingTime: totalSeconds,
+        startTime: Date.now(),
+        timer: null
+    };
+    
+    // Aggiorna subito la barra di progresso
+    updateProgressBar(zoneId_str, 0, totalSeconds);
+    
+    // Avvia il timer
+    activeZones[zoneId_str].timer = setInterval(() => {
+        // Calcola tempo trascorso
+        const now = Date.now();
+        const elapsed = Math.floor((now - activeZones[zoneId_str].startTime) / 1000);
+        const remaining = Math.max(0, totalSeconds - elapsed);
+        
+        // Aggiorna tempo rimanente
+        activeZones[zoneId_str].remainingTime = remaining;
+        
+        // Aggiorna la barra di progresso
+        updateProgressBar(zoneId_str, elapsed, totalSeconds);
+        
+        // Se il timer è scaduto, ferma la zona
+        if (remaining <= 0) {
+            stopZoneTimer(zoneId);
             
-            if (isChecked) {
-                // Avvia la zona
-                const durationInput = document.getElementById(`duration-${zoneId}`);
-                const duration = durationInput ? parseInt(durationInput.value) : 0;
+            // Reset UI
+            const toggle = document.getElementById(`toggle-${zoneId}`);
+            const zoneCard = document.getElementById(`zone-${zoneId}`);
+            const durationInput = document.getElementById(`duration-${zoneId}`);
+            
+            if (toggle) {
+                toggle.checked = false;
+                toggle.disabled = false;
+            }
+            if (zoneCard) zoneCard.classList.remove('active');
+            if (durationInput) durationInput.disabled = false;
+            
+            // La zona sarà disattivata sul server al prossimo polling
+        }
+    }, 1000);
+}
+
+// Ferma il timer per una zona
+function stopZoneTimer(zoneId) {
+    const zoneId_str = zoneId.toString();
+    
+    if (activeZones[zoneId_str] && activeZones[zoneId_str].timer) {
+        clearInterval(activeZones[zoneId_str].timer);
+        delete activeZones[zoneId_str];
+    }
+    
+    // Resetta la barra di progresso
+    resetProgressBar(zoneId);
+}
+
+// Aggiorna la barra di progresso
+function updateProgressBar(zoneId, elapsed, total) {
+    const progressBar = document.getElementById(`progress-${zoneId}`);
+    const timerDisplay = document.getElementById(`timer-${zoneId}`);
+    
+    if (!progressBar || !timerDisplay) return;
+    
+    // Calcola il valore percentuale
+    const percentComplete = Math.min(100, Math.floor((elapsed / total) * 100));
+    progressBar.value = percentComplete;
+    
+    // Aggiorna il display del timer
+    const remaining = Math.max(0, total - elapsed);
+    const minutes = Math.floor(remaining / 60);
+    const seconds = remaining % 60;
+    timerDisplay.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+}
+
+// Resetta la barra di progresso
+function resetProgressBar(zoneId) {
+    const progressBar = document.getElementById(`progress-${zoneId}`);
+    const timerDisplay = document.getElementById(`timer-${zoneId}`);
+    
+    if (progressBar) progressBar.value = 0;
+    if (timerDisplay) timerDisplay.textContent = '00:00';
+}
+
+// ====================== GESTIONE STATO SERVER ======================
+// Ottiene lo stato delle zone dal server
+function fetchZonesStatus() {
+    Promise.all([
+        fetch('/get_zones_status').then(response => {
+            if (!response.ok) throw new Error('Errore nel caricamento dello stato delle zone');
+            return response.json();
+        }),
+        fetch('/get_program_state').then(response => {
+            if (!response.ok) throw new Error('Errore nel caricamento dello stato del programma');
+            return response.json();
+        })
+    ])
+    .then(([zonesStatus, programState]) => {
+        console.log("Stato zone ricevuto:", zonesStatus);
+        console.log("Stato programma ricevuto:", programState);
+        
+        // Gestisci lo stato del programma
+        handleProgramState(programState, zonesStatus);
+        
+        // Aggiorna l'UI delle zone
+        updateZonesUI(zonesStatus);
+    })
+    .catch(error => {
+        console.error('Errore nel recupero dello stato:', error);
+    });
+}
+
+// Gestisce lo stato del programma
+function handleProgramState(programState, zonesStatus) {
+    const programRunning = programState && programState.program_running;
+    
+    // Se lo stato è cambiato
+    if (programRunning !== disabledManualMode) {
+        disabledManualMode = programRunning;
+        
+        if (programRunning) {
+            // Disabilita la pagina manual
+            disableManualPage();
+        } else {
+            // Riabilita la pagina manual
+            enableManualPage();
+        }
+    }
+}
+
+// Disabilita la pagina manual
+function disableManualPage() {
+    console.log("Disabilitazione controllo manuale - Programma in esecuzione");
+    
+    // Disabilita tutte le card
+    document.querySelectorAll('.zone-card').forEach(card => {
+        card.classList.add('disabled-mode');
+    });
+    
+    // Disabilita tutti gli input e toggle
+    document.querySelectorAll('.zone-toggle, [id^="duration-"]').forEach(el => {
+        el.disabled = true;
+    });
+    
+    // Aggiungi overlay se non esiste
+    if (!document.getElementById('manual-page-overlay')) {
+        const overlay = document.createElement('div');
+        overlay.id = 'manual-page-overlay';
+        overlay.className = 'manual-page-overlay';
+        
+        overlay.innerHTML = `
+            <div class="overlay-message">
+                <h3>Controllo Manuale Disabilitato</h3>
+                <p>Un programma è attualmente in esecuzione.<br>Il controllo manuale sarà disponibile al termine del programma.</p>
+            </div>
+        `;
+        
+        document.body.appendChild(overlay);
+    }
+}
+
+// Riabilita la pagina manual
+function enableManualPage() {
+    console.log("Riabilitazione controllo manuale - Nessun programma in esecuzione");
+    
+    // Riabilita tutte le card
+    document.querySelectorAll('.zone-card').forEach(card => {
+        card.classList.remove('disabled-mode');
+    });
+    
+    // Riabilita tutti gli input e toggle (tranne per le zone attive)
+    document.querySelectorAll('.zone-toggle:not(:checked), [id^="duration-"]').forEach(el => {
+        const zoneId = el.id.split('-')[1];
+        const toggle = document.getElementById(`toggle-${zoneId}`);
+        
+        // Non riabilitare input per zone attive
+        if (!toggle || !toggle.checked) {
+            el.disabled = false;
+        }
+    });
+    
+    // Rimuovi overlay se esiste
+    const overlay = document.getElementById('manual-page-overlay');
+    if (overlay) {
+        overlay.remove();
+    }
+}
+
+// Aggiorna l'UI delle zone
+function updateZonesUI(zonesStatus) {
+    if (!Array.isArray(zonesStatus)) return;
+    
+    // Aggiorna ogni zona
+    zonesStatus.forEach(zone => {
+        if (!zone || zone.id === undefined) return;
+        
+        const zoneId = zone.id;
+        const toggle = document.getElementById(`toggle-${zoneId}`);
+        const zoneCard = document.getElementById(`zone-${zoneId}`);
+        const durationInput = document.getElementById(`duration-${zoneId}`);
+        
+        if (!toggle || !zoneCard) return;
+        
+        // Aggiorna stato toggle senza triggerare eventi
+        if (toggle.checked !== zone.active) {
+            // Rimuovi handler temporaneamente
+            const originalOnChange = toggle.onchange;
+            toggle.onchange = null;
+            
+            // Cambia stato
+            toggle.checked = zone.active;
+            
+            // Ripristina handler
+            setTimeout(() => {
+                toggle.onchange = originalOnChange;
+            }, 0);
+        }
+        
+        // Aggiorna stato visivo
+        if (zone.active) {
+            zoneCard.classList.add('active');
+            
+            // Disabilita l'input durata
+            if (durationInput) durationInput.disabled = true;
+            
+            // Se non c'è un timer locale per questa zona, crealo
+            const zoneId_str = zoneId.toString();
+            if (!activeZones[zoneId_str] || !activeZones[zoneId_str].timer) {
+                // Determina durata totale
+                let totalDuration = 0;
                 
-                if (isNaN(duration) || duration <= 0) {
-                    showToast('Inserisci una durata valida in minuti', 'warning');
-                    event.target.checked = false;
-                    return;
+                // Da input utente
+                if (durationInput && durationInput.value) {
+                    totalDuration = parseInt(durationInput.value) * 60;
+                } else {
+                    // Stima dalla zona attiva
+                    totalDuration = zone.remaining_time * 1.2; // Stima (rimanente + 20%)
                 }
                 
-                startZone(zoneId, duration);
-            } else {
-                // Ferma la zona
-                stopZone(zoneId);
+                // Imposta timer locale
+                startZoneTimer(zoneId, totalDuration);
+                
+                // Aggiorna con il tempo rimanente dal server
+                activeZones[zoneId_str].remainingTime = zone.remaining_time;
+                
+                // Calcola tempo trascorso
+                const elapsed = activeZones[zoneId_str].totalDuration - zone.remaining_time;
+                
+                // Aggiusta startTime
+                activeZones[zoneId_str].startTime = Date.now() - (elapsed * 1000);
             }
-        });
+        } else {
+            zoneCard.classList.remove('active');
+            
+            // Riabilita l'input durata se non è in modalità disabilitata
+            if (durationInput && !disabledManualMode) {
+                durationInput.disabled = false;
+            }
+            
+            // Se c'è un timer locale per questa zona, fermalo
+            stopZoneTimer(zoneId);
+        }
     });
 }
 
-// Inizializzazione quando il documento è caricato
+// ====================== INIZIALIZZAZIONE ======================
+// Inizializzazione a caricamento documento
 document.addEventListener('DOMContentLoaded', () => {
-    // Se userSettings è già disponibile, inizializza la pagina
+    console.log("DOM caricato - Inizializzazione manual.js");
+    
     if (window.userData && Object.keys(window.userData).length > 0) {
         initializeManualPage(window.userData);
     }

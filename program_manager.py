@@ -333,6 +333,18 @@ def _day_of_year(year, month, day):
     
     return day_of_year
 
+def _is_leap_year(year):
+    """
+    Verifica se un anno è bisestile.
+    
+    Args:
+        year: Anno da verificare
+        
+    Returns:
+        boolean: True se l'anno è bisestile, False altrimenti
+    """
+    return year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+
 def is_program_due_today(program):
     """
     Verifica se il programma è previsto per oggi in base alla cadenza.
@@ -357,6 +369,7 @@ def is_program_due_today(program):
     
     # Default: non eseguito mai (-1) o giorno diverso
     last_run_day = -1
+    last_run_year = -1  # Aggiungiamo l'anno per gestire cambio anno
 
     # Estrai la data dell'ultima esecuzione
     if 'last_run_date' in program:
@@ -366,22 +379,43 @@ def is_program_due_today(program):
             if len(date_parts) == 3:
                 year, month, day = int(date_parts[0]), int(date_parts[1]), int(date_parts[2])
                 last_run_day = _day_of_year(year, month, day)
+                last_run_year = year
             else:
                 log_event(f"Formato data non valido: {last_run_date}", "ERROR")
         except Exception as e:
             log_event(f"Errore nella conversione della data di esecuzione: {e}", "ERROR")
 
+    # Log per debug
+    program_name = program.get('name', 'Senza nome')
+    log_event(f"Verifica esecuzione per '{program_name}': ultima esecuzione {last_run_year}-{last_run_day}, oggi {current_year}-{current_day_of_year}", "DEBUG")
+
+    # Se non è mai stato eseguito, eseguilo oggi
+    if last_run_day == -1:
+        return True
+
     # Determina la cadenza del programma
     recurrence = program.get('recurrence', 'giornaliero')
+    
+    # Gestisci il cambio di anno
+    days_since_last_run = 0
+    if last_run_year == current_year:
+        days_since_last_run = current_day_of_year - last_run_day
+    else:
+        # Se l'anno è diverso, calcola i giorni rimanenti nell'anno precedente
+        # + i giorni trascorsi nell'anno corrente
+        days_in_last_year = 366 if _is_leap_year(last_run_year) else 365
+        days_since_last_run = (days_in_last_year - last_run_day) + current_day_of_year
+    
+    log_event(f"Giorni dall'ultima esecuzione di '{program_name}': {days_since_last_run}", "DEBUG")
     
     # Verifica basata sulla cadenza
     if recurrence == 'giornaliero':
         # Il programma è previsto ogni giorno, ma non più volte al giorno
-        return last_run_day != current_day_of_year
+        return days_since_last_run >= 1
     
     elif recurrence == 'giorni_alterni':
         # Il programma è previsto ogni 2 giorni
-        return (current_day_of_year - last_run_day) >= 2
+        return days_since_last_run >= 2
         
     elif recurrence == 'personalizzata':
         # Il programma è previsto ogni intervallo_giorni
@@ -389,7 +423,7 @@ def is_program_due_today(program):
         # Assicura che l'intervallo sia almeno 1
         if interval_days <= 0:
             interval_days = 1
-        return (current_day_of_year - last_run_day) >= interval_days
+        return days_since_last_run >= interval_days
     
     # Per valori di recurrence sconosciuti, non eseguire
     return False
@@ -550,23 +584,25 @@ async def execute_program(program, manual=False):
                 
             log_event(f"Zona {zone_id} completata", "INFO")
 
-            # In program_manager.py, the execute_program function, find this section and update it:
-            # MODIFIED CODE - CORRECT HANDLING OF ACTIVATION DELAY
             # Gestione del ritardo tra zone
             if activation_delay > 0 and i < len(steps) - 1:
-                log_event(f"Attesa {activation_delay} secondi prima della prossima zona", "INFO")
+                # Converti il ritardo in secondi se necessario (potrebbe già essere in secondi)
+                delay_in_seconds = activation_delay
+                # Aggiorna il messaggio per chiarezza
+                log_event(f"Attesa {delay_in_seconds} secondi prima della prossima zona", "INFO")
 
-                # Suddividi anche il ritardo in intervalli più brevi
-                delay_seconds = activation_delay  # Già in secondi, non moltiplicare per 60
-                while delay_seconds > 0 and program_running:
-                    wait_time = min(check_interval, delay_seconds)
+                # Suddividi il ritardo in intervalli più brevi per controllo interruzioni
+                remaining_delay = delay_in_seconds
+                while remaining_delay > 0 and program_running:
+                    wait_time = min(check_interval, remaining_delay)
                     await asyncio.sleep(wait_time)
-                    delay_seconds -= wait_time
+                    remaining_delay -= wait_time
 
-                    # Verifica lo stato del programma
+                    # Verifica lo stato del programma (potrebbe essere stato interrotto)
                     load_program_state()
 
                     if not program_running:
+                        log_event("Ritardo interrotto: programma fermato", "INFO")
                         break
         
         # FASE 4: Verifica se l'esecuzione è stata completata con successo
@@ -736,6 +772,9 @@ async def check_programs():
         settings = load_user_settings()
         automatic_programs_enabled = settings.get('automatic_programs_enabled', False)
         
+        # Log per debug
+        log_event(f"Controllo programmi automatici - Abilitati globalmente: {automatic_programs_enabled}", "DEBUG")
+        
         # Se i programmi automatici sono disabilitati globalmente, non fare nulla
         if not automatic_programs_enabled:
             return
@@ -750,6 +789,8 @@ async def check_programs():
         current_time_str = f"{t[3]:02d}:{t[4]:02d}"
         current_hour = t[3]
         current_minute = t[4]
+        
+        log_event(f"Orario controllo programmi: {current_time_str}", "DEBUG")
 
         # Verifica ogni programma
         for program_id, program in programs.items():
@@ -759,12 +800,16 @@ async def check_programs():
                 
             # Verifica se questo programma specifico ha l'automazione abilitata
             # Default a True per compatibilità con versioni precedenti
-            if program.get('automatic_enabled', True) is not True:
+            program_auto_enabled = program.get('automatic_enabled', True)
+            if not program_auto_enabled:
                 continue
                 
+            program_name = program.get('name', f'Programma {program_id}')
             activation_time = program.get('activation_time', '')
             if not activation_time:
                 continue
+            
+            log_event(f"Verifica programma '{program_name}' con orario {activation_time}", "DEBUG")
             
             # Parse del tempo di attivazione
             activation_parts = activation_time.split(':')
@@ -775,54 +820,56 @@ async def check_programs():
                 activation_hour = int(activation_parts[0])
                 activation_minute = int(activation_parts[1])
                 
-                # Verifica se il tempo corrente è vicino al tempo di attivazione
-                # Include il minuto prima e dopo per rendere più robusto l'avvio
+                # Verifica se il tempo corrente è uguale al tempo di attivazione
+                # Per maggiore robustezza, controlliamo anche il minuto prima/dopo
                 time_match = False
                 
                 # Corrispondenza esatta
                 if current_hour == activation_hour and current_minute == activation_minute:
+                    log_event(f"Corrispondenza orario esatta per '{program_name}'", "INFO")
                     time_match = True
-                # Minuto prima
+                # Minuto prima (per evitare di perdere l'attivazione)
                 elif current_hour == activation_hour and current_minute == activation_minute - 1:
+                    log_event(f"Corrispondenza orario (minuto precedente) per '{program_name}'", "DEBUG")
                     time_match = True
-                # Minuto dopo
-                elif current_hour == activation_hour and current_minute == activation_minute + 1:
-                    time_match = True
-                # Cambio ora (es: 08:59 vs 09:00)
+                # Gestisci il caso di cambio ora (es. 08:59 vs 09:00)
                 elif activation_minute == 0 and current_minute == 59 and current_hour == activation_hour - 1:
-                    time_match = True
-                # Cambio ora (es: 09:59 vs 10:00)
-                elif current_minute == 0 and activation_minute == 59 and current_hour == activation_hour + 1:
+                    log_event(f"Corrispondenza orario (cambio ora) per '{program_name}'", "DEBUG")
                     time_match = True
                 
-                # Verifica se il programma deve essere eseguito
-                if (time_match and
-                    is_program_active_in_current_month(program) and
-                    is_program_due_today(program)):
+                # Verifica se il programma deve essere eseguito oggi
+                if time_match:
+                    active_in_month = is_program_active_in_current_month(program)
+                    due_today = is_program_due_today(program)
                     
-                    log_event(f"Avvio programma pianificato: {program.get('name', 'Senza nome')}", "INFO")
+                    log_event(f"Programma '{program_name}': attivo nel mese corrente: {active_in_month}, previsto oggi: {due_today}", "INFO")
                     
-                    # Verifica se c'è già un programma in esecuzione
-                    load_program_state()  # Assicurati di avere lo stato aggiornato
-                    if program_running:
-                        log_event("Programma in esecuzione, verrà interrotto per avviare il nuovo programma automatico", "WARNING")
-                        # Interrompi il programma in corso prima di avviare il nuovo
-                        stop_program()  # Questa funzione ferma il programma attivo e tutte le zone
-                        # Breve pausa per assicurarsi che tutto sia fermato
-                        await asyncio.sleep(2)
-                        # Ricarica lo stato per assicurarsi che sia aggiornato
-                        load_program_state()
+                    if active_in_month and due_today:
+                        log_event(f"*** AVVIO programma pianificato: {program_name} ***", "INFO")
                         
-                    # Avvia il programma con gestione degli errori
-                    try:
-                        success = await execute_program(program)
-                        if not success:
-                            log_event(f"Errore esecuzione programma {program_id}", "ERROR")
-                    except Exception as e:
-                        log_event(f"Eccezione durante esecuzione programma {program_id}: {e}", "ERROR")
-            except ValueError:
+                        # Verifica se c'è già un programma in esecuzione
+                        load_program_state()  # Assicurati di avere lo stato aggiornato
+                        if program_running:
+                            log_event(f"Programma in esecuzione, verrà interrotto per avviare '{program_name}'", "WARNING")
+                            # Interrompi il programma in corso prima di avviare il nuovo
+                            stop_program()  # Questa funzione ferma il programma attivo e tutte le zone
+                            # Breve pausa per assicurarsi che tutto sia fermato
+                            await asyncio.sleep(2)
+                            # Ricarica lo stato per assicurarsi che sia aggiornato
+                            load_program_state()
+                            
+                        # Avvia il programma con gestione degli errori
+                        try:
+                            success = await execute_program(program)
+                            if success:
+                                log_event(f"Programma '{program_name}' avviato con successo", "INFO")
+                            else:
+                                log_event(f"Errore nell'esecuzione del programma '{program_name}'", "ERROR")
+                        except Exception as e:
+                            log_event(f"Eccezione durante esecuzione programma '{program_name}': {e}", "ERROR")
+            except ValueError as e:
                 # Errore nel parsing dei tempi, salta questo programma
-                log_event(f"Formato tempo non valido nel programma {program_id}: {activation_time}", "WARNING")
+                log_event(f"Formato tempo non valido nel programma {program_id}: {activation_time}: {e}", "WARNING")
                 continue
     except Exception as e:
         log_event(f"Errore critico in check_programs: {e}", "ERROR")

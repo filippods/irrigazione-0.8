@@ -124,7 +124,7 @@ async def program_check_loop():
                 log_event("Reset contatore errori dopo intervallo di tempo", "INFO")
             
             # Se ci sono troppi errori consecutivi, forza un reset più drastico
-            if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+            if consecutive_program_errors >= MAX_CONSECUTIVE_ERRORS:
                 log_event(f"Troppi errori consecutivi ({consecutive_program_errors}), reset forzato", "ERROR")
                 stop_all_zones()  # Arresta tutte le zone per sicurezza
                 reset_program_state()  # Resetta lo stato del programma
@@ -204,62 +204,6 @@ async def watchdog_loop():
             log_event(f"Errore nel watchdog: {e}", "ERROR")
             # Ridotto a 30 secondi in caso di errore
             await asyncio.sleep(30)
-
-# Implementazione diretta del controllo diagnostico
-# invece di importare system_monitor.start_diagnostics
-async def basic_diagnostics_loop():
-    """
-    Versione semplificata del sistema di diagnostica che esegue
-    controlli base senza terminare. Questa funzione sostituisce
-    l'importazione del modulo system_monitor.
-    """
-    log_event("Sistema diagnostica base avviato", "INFO")
-    
-    while True:
-        try:
-            # Controlla memoria
-            free_mem = gc.mem_free()
-            total_mem = free_mem + gc.mem_alloc()
-            percent_free = (free_mem / total_mem) * 100
-            
-            # Controlla stato rete
-            try:
-                import network
-                wlan_sta = network.WLAN(network.STA_IF)
-                wlan_ap = network.WLAN(network.AP_IF)
-                
-                if wlan_sta.isconnected():
-                    # Client connesso - tutto ok
-                    pass
-                elif wlan_ap.active():
-                    # AP attivo - tutto ok
-                    pass
-                else:
-                    # Nessuna connettività - log warning
-                    log_event("Nessuna connettività di rete attiva", "WARNING")
-            except:
-                pass
-            
-            # Controlla server web
-            try:
-                import socket
-                s = socket.socket()
-                s.settimeout(2)
-                s.connect(('127.0.0.1', 80))
-                s.send(b'GET / HTTP/1.0\r\n\r\n')
-                s.close()
-                # Server risponde - tutto ok
-            except:
-                log_event("Server web non risponde", "WARNING")
-            
-            # Attendi 30 secondi prima del prossimo controllo
-            await asyncio.sleep(30)
-        
-        except asyncio.CancelledError:
-            break
-        except Exception as e:
-            log_event(f"Errore diagnostica: {e}", "ERROR")
-            await asyncio.sleep(60)  # Attendi più a lungo in caso di errore
 
 async def main():
     """
@@ -360,7 +304,6 @@ async def main():
         watchdog_task = asyncio.create_task(watchdog_loop())
         tasks.append(watchdog_task)
         
-        # Avvia la versione semplificata della diagnostica
         # Avvia la versione semplificata della diagnostica
         log_event("Avvio sistema di diagnostica semplificato", "INFO")
         diagnostics_task = asyncio.create_task(basic_diagnostics_loop())
