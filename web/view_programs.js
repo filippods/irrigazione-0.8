@@ -6,10 +6,6 @@
 if (typeof window.programStatusInterval === 'undefined') {
     window.programStatusInterval = null;      // Intervallo per il polling dello stato
 }
-// Replace lines 9-18 in view_programs.js with this:
-if (typeof window.programStatusInterval === 'undefined') {
-    window.programStatusInterval = null;      // Intervallo per il polling dello stato
-}
 if (typeof window.programsData === 'undefined') {
     window.programsData = {};      // Cache dei dati dei programmi
 }
@@ -20,10 +16,16 @@ window.lastKnownState = null;           // Ultimo stato conosciuto (per confront
 window.pollingAccelerated = false;      // Flag per indicare se il polling è accelerato
 window.retryInProgress = false;         // Flag per evitare richieste multiple contemporanee
 
-// Costanti di configurazione
-const NORMAL_POLLING_INTERVAL = 5000;  // 5 secondi per il polling normale
-const FAST_POLLING_INTERVAL = 1000;    // 1 secondo per il polling accelerato
-const MAX_API_RETRIES = 3;             // Numero massimo di tentativi per le chiamate API
+// Costanti di configurazione - Usa variabili window per evitare ridichiarazioni
+if (typeof window.NORMAL_POLLING_INTERVAL === 'undefined') {
+    window.NORMAL_POLLING_INTERVAL = 5000;  // 5 secondi per il polling normale
+}
+if (typeof window.FAST_POLLING_INTERVAL === 'undefined') {
+    window.FAST_POLLING_INTERVAL = 1000;    // 1 secondo per il polling accelerato
+}
+if (typeof window.MAX_API_RETRIES === 'undefined') {
+    window.MAX_API_RETRIES = 3;             // Numero massimo di tentativi per le chiamate API
+}
 
 // =================== INIZIALIZZAZIONE ===================
 
